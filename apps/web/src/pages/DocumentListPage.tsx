@@ -6,6 +6,16 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
 }
 
+function formatProgress(progress: DocumentSummary["progress"]): string {
+  if (!progress) return "—";
+  const parts: string[] = [];
+  if (progress.pending > 0) parts.push(`${progress.pending} pending`);
+  if (progress.approved > 0) parts.push(`${progress.approved} approved`);
+  if (progress.corrected > 0) parts.push(`${progress.corrected} corrected`);
+  if (progress.carried_over > 0) parts.push(`${progress.carried_over} carried`);
+  return parts.length > 0 ? parts.join(", ") : "all reviewed";
+}
+
 export function DocumentListPage() {
   const [docs, setDocs] = useState<DocumentSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +50,7 @@ export function DocumentListPage() {
             <th>Type</th>
             <th>Version</th>
             <th>Extraction</th>
+            <th>Review</th>
             <th></th>
           </tr>
         </thead>
@@ -50,6 +61,15 @@ export function DocumentListPage() {
               <td><code>{d.type}</code></td>
               <td>v{d.currentVersion}</td>
               <td><StatusBadge status={d.status} /></td>
+              <td className="review-col">
+                {d.status === "extracted" ? (
+                  <span className={d.progress?.pending ? "needs-review" : ""}>
+                    {formatProgress(d.progress)}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </td>
               <td>
                 <Link to={`/documents/${d.id}`}>Review →</Link>
               </td>

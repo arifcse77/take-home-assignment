@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prisma } from "@lomi/database";
 import { config } from "./config.js";
-import { enqueueExtraction } from "./queue.js";
+import { closeQueueConnections, enqueueExtraction } from "./queue.js";
 import { recoverStuckExtractions } from "./recover-jobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,4 +67,7 @@ main()
     console.error(e);
     process.exit(1);
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    await prisma.$disconnect();
+    await closeQueueConnections();
+  });

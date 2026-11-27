@@ -1,11 +1,26 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
+export interface ReviewCounts {
+  pending: number;
+  approved: number;
+  corrected: number;
+  carried_over: number;
+}
+
 export interface DocumentSummary {
   id: string;
   type: string;
   title: string;
   currentVersion: number;
   status: string;
+  progress: ReviewCounts | null;
+}
+
+export interface DocumentVersionMeta {
+  version: number;
+  status: string;
+  createdAt: string;
+  progress: ReviewCounts | null;
 }
 
 export interface ValueRow {
@@ -32,17 +47,14 @@ export interface DocumentDetail {
   type: string;
   title: string;
   currentVersion: number;
+  isLatest?: boolean;
   status: string;
   failureReason: string | null;
   parsedText: string | null;
   values: ValueRow[];
 }
 
-export interface Progress {
-  pending: number;
-  approved: number;
-  corrected: number;
-  carried_over: number;
+export interface Progress extends ReviewCounts {
   status: string;
   version: number;
 }
@@ -57,7 +69,11 @@ async function json<T>(res: Response): Promise<T> {
 
 export const api = {
   listDocuments: () => fetch(`${API_BASE}/documents`).then(json<DocumentSummary[]>),
+  listVersions: (id: string) =>
+    fetch(`${API_BASE}/documents/${id}/versions`).then(json<DocumentVersionMeta[]>),
   getDocument: (id: string) => fetch(`${API_BASE}/documents/${id}`).then(json<DocumentDetail>),
+  getDocumentVersion: (id: string, version: number) =>
+    fetch(`${API_BASE}/documents/${id}/versions/${version}`).then(json<DocumentDetail>),
   getProgress: (id: string) => fetch(`${API_BASE}/documents/${id}/progress`).then(json<Progress>),
   review: (valueId: string, body: { action: "approve" | "correct"; correctedValue?: string; note?: string }) =>
     fetch(`${API_BASE}/values/${valueId}/review`, {

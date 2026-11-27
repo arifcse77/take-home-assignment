@@ -12,6 +12,11 @@ export const extractionQueue = new Queue(QUEUE_NAME, {
 });
 
 /** Job id = version id so duplicate enqueue is a no-op for in-flight work. */
+export async function closeQueueConnections(): Promise<void> {
+  await extractionQueue.close();
+  redis.disconnect();
+}
+
 export async function enqueueExtraction(versionId: string): Promise<void> {
   const jobId = `extract-${versionId}`;
   const existing = await extractionQueue.getJob(jobId);

@@ -6,6 +6,7 @@ import { prisma, ReviewStatus } from "@lomi/database";
 import { config } from "./config.js";
 import { enqueueExtraction } from "./queue.js";
 import { parseUpload } from "./multipart.js";
+import { countReviewStatuses } from "./progress.js";
 
 function displayValue(v: {
   value: string | null;
@@ -16,25 +17,59 @@ function displayValue(v: {
   return v.value;
 }
 
+function mapValueRows(
+  values: Array<{
+    id: string;
+    fieldName: string;
+    value: string | null;
+    evidence: string | null;
+    gapReason: string | null;
+    reviewStatus: ReviewStatus;
+    correctedValue: string | null;
+    reviewNote: string | null;
+    previousSnapshot: unknown;
+  }>
+) {
+  return values.map((v) => ({
+    id: v.id,
+    fieldName: v.fieldName,
+    value: v.value,
+    displayValue: displayValue(v),
+    evidence: v.evidence,
+    gapReason: v.gapReason,
+    reviewStatus: v.reviewStatus,
+    correctedValue: v.correctedValue,
+    reviewNote: v.reviewNote,
+    previousSnapshot: v.previousSnapshot,
+  }));
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/health", async () => ({ ok: true }));
 
   app.get("/documents", async () => {
     const docs = await prisma.document.findMany({
       include: {
-        versions: { orderBy: { version: "desc" }, take: 1 },
+        versions: {
+          orderBy: { version: "desc" },
+          take: 1,
+          include: { values: { select: { reviewStatus: true } } },
+        },
       },
       orderBy: { title: "asc" },
     });
 
     return docs.map((d) => {
       const current = d.versions[0];
+      const progress =
+        current && current.values.length > 0 ? countReviewStatuses(current.values) : null;
       return {
         id: d.id,
         type: d.type,
         title: d.title,
         currentVersion: current?.version ?? 0,
         status: current?.status ?? "queued",
+        progress,
       };
     });
   });
@@ -115,6 +150,66 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ documentId: id, version: nextVersion, status: "queued" });
   });
 
+  app.get<{ Params: { id: string } }>("/documents/:id/versions", async (req, reply) => {
+    const { id } = req.params;
+    const doc = await prisma.document.findUnique({ where: { id } });
+    if (!doc) return reply.code(404).send({ error: "not found" });
+
+    const versions = await prisma.documentVersion.findMany({
+      where: { documentId: id },
+      orderBy: { version: "desc" },
+      include: { values: { select: { reviewStatus: true } } },
+    });
+
+    return versions.map((v) => ({
+      version: v.version,
+      status: v.status,
+      createdAt: v.createdAt,
+      progress: v.values.length > 0 ? countReviewStatuses(v.values) : null,
+    }));
+  });
+
+  app.get<{ Params: { id: string; version: string } }>(
+    "/documents/:id/versions/:version",
+    async (req, reply) => {
+      const { id } = req.params;
+      const versionNum = Number(req.params.version);
+      if (!Number.isFinite(versionNum) || versionNum < 1) {
+        return reply.code(400).send({ error: "invalid version" });
+      }
+
+      const doc = await prisma.document.findUnique({ where: { id } });
+      if (!doc) return reply.code(404).send({ error: "not found" });
+
+      const version = await prisma.documentVersion.findUnique({
+        where: { documentId_version: { documentId: id, version: versionNum } },
+        include: { values: true },
+      });
+      if (!version) return reply.code(404).send({ error: "version not found" });
+
+      const latest = await prisma.documentVersion.findFirst({
+        where: { documentId: id },
+        orderBy: { version: "desc" },
+        select: { version: true },
+      });
+
+      return {
+        id: doc.id,
+        type: doc.type,
+        title: doc.title,
+        currentVersion: version.version,
+        isLatest: latest?.version === version.version,
+        status: version.status,
+        failureReason: version.failureReason,
+        parsedText: version.parsedText,
+        values:
+          version.status === "extracted" || version.status === "failed"
+            ? mapValueRows(version.values)
+            : [],
+      };
+    }
+  );
+
   app.get<{ Params: { id: string } }>("/documents/:id", async (req, reply) => {
     const { id } = req.params;
     const doc = await prisma.document.findUnique({
@@ -138,18 +233,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       parsedText: current.parsedText,
       values:
         current.status === "extracted" || current.status === "failed"
-          ? current.values.map((v) => ({
-              id: v.id,
-              fieldName: v.fieldName,
-              value: v.value,
-              displayValue: displayValue(v),
-              evidence: v.evidence,
-              gapReason: v.gapReason,
-              reviewStatus: v.reviewStatus,
-              correctedValue: v.correctedValue,
-              reviewNote: v.reviewNote,
-              previousSnapshot: v.previousSnapshot,
-            }))
+          ? mapValueRows(current.values)
           : [],
     };
   });
@@ -163,10 +247,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!current) return reply.code(404).send({ error: "not found" });
 
-    const counts = { pending: 0, approved: 0, corrected: 0, carried_over: 0 };
-    for (const v of current.values) {
-      counts[v.reviewStatus]++;
-    }
+    const counts = countReviewStatuses(current.values);
     return { documentId: id, version: current.version, status: current.status, ...counts };
   });
 

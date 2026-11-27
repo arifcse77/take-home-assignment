@@ -42,7 +42,7 @@ Turborepo runs `build` / `lint` / `test` across packages.
 - **DocumentVersion** — PDF file path, `parsedText`, extraction debug fields, status lifecycle.
 - **ExtractedValue** — one row per field per version; **reviews** live here (`reviewStatus`, `correctedValue`, `reviewNote`). Corrections annotate rather than overwrite the LLM `value`; API returns `displayValue`.
 
-Prior versions are never deleted; the UI reads the latest version.
+Prior versions are never deleted. **`GET /documents/:id/versions`** lists them; **`GET /documents/:id/versions/:n`** returns that version’s values and parsed text. The detail UI has a version dropdown (historical views are read-only). The document list shows review progress counts when extraction is complete.
 
 ## Redis vs Postgres
 

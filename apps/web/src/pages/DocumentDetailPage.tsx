@@ -1,6 +1,12 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type DocumentDetail, type Progress, type ValueRow } from "../api";
+import {
+  api,
+  type DocumentDetail,
+  type DocumentVersionMeta,
+  type Progress,
+  type ValueRow,
+} from "../api";
 
 function highlightEvidence(text: string | null, evidence: string | null): string {
   if (!text || !evidence) return text ?? "";
@@ -16,10 +22,12 @@ function ValueCard({
   row,
   parsedText,
   onUpdated,
+  readOnly,
 }: {
   row: ValueRow;
   parsedText: string | null;
   onUpdated: () => void;
+  readOnly?: boolean;
 }) {
   const [correcting, setCorrecting] = useState(false);
   const [correctValue, setCorrectValue] = useState(row.displayValue ?? "");
@@ -48,7 +56,7 @@ function ValueCard({
     }
   };
 
-  const needsAttention = row.reviewStatus === "pending";
+  const needsAttention = !readOnly && row.reviewStatus === "pending";
 
   return (
     <article className={`value-card ${needsAttention ? "value-card--attention" : ""}`}>
@@ -116,27 +124,50 @@ function ValueCard({
 export function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
+  const [versions, setVersions] = useState<DocumentVersionMeta[]>([]);
+  const [viewVersion, setViewVersion] = useState<number | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  const isLatestView = viewVersion === null;
+
   const reload = useCallback(async () => {
     if (!id) return;
     try {
-      const [d, p] = await Promise.all([api.getDocument(id), api.getProgress(id)]);
-      setDoc(d);
-      setProgress(p);
+      const versionList = await api.listVersions(id);
+      setVersions(versionList);
+
+      if (viewVersion != null) {
+        const d = await api.getDocumentVersion(id, viewVersion);
+        setDoc(d);
+        const meta = versionList.find((v) => v.version === viewVersion);
+        setProgress(
+          meta?.progress
+            ? { ...meta.progress, version: viewVersion, status: meta.status }
+            : null
+        );
+      } else {
+        const [d, p] = await Promise.all([api.getDocument(id), api.getProgress(id)]);
+        setDoc({ ...d, isLatest: true });
+        setProgress(p);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
-  }, [id]);
+  }, [id, viewVersion]);
 
   useEffect(() => {
     reload();
     const t = setInterval(reload, 3000);
     return () => clearInterval(t);
   }, [reload]);
+
+  const onSelectVersion = (v: number) => {
+    const latest = versions[0]?.version;
+    setViewVersion(v === latest ? null : v);
+  };
 
   const onUploadVersion = async (file: File) => {
     if (!id) return;
@@ -162,8 +193,30 @@ export function DocumentDetailPage() {
         <Link to="/">← All documents</Link>
       </p>
       <h1>{doc.title}</h1>
+      {versions.length > 0 && (
+        <div className="version-bar">
+          <label>
+            View version{" "}
+            <select
+              value={viewVersion ?? versions[0]?.version ?? 1}
+              onChange={(e) => onSelectVersion(Number(e.target.value))}
+            >
+              {versions.map((v) => (
+                <option key={v.version} value={v.version}>
+                  v{v.version} ({v.status})
+                </option>
+              ))}
+            </select>
+          </label>
+          {!isLatestView && (
+            <span className="hint">Read-only snapshot — switch to latest to review or upload.</span>
+          )}
+        </div>
+      )}
       <p>
-        Version {doc.currentVersion} · <span className={`badge badge-${doc.status}`}>{doc.status}</span>
+        Version {doc.currentVersion}
+        {!isLatestView && " (historical)"} ·{" "}
+        <span className={`badge badge-${doc.status}`}>{doc.status}</span>
         {progress && (
           <span className="progress-summary">
             {" "}
@@ -172,10 +225,10 @@ export function DocumentDetailPage() {
           </span>
         )}
       </p>
-      {pendingCount > 0 && doc.status === "extracted" && (
+      {isLatestView && pendingCount > 0 && doc.status === "extracted" && (
         <p className="attention-banner">{pendingCount} field(s) need review</p>
       )}
-      {doc.status === "failed" && (
+      {isLatestView && doc.status === "failed" && (
         <div className="error-box">
           <p>Extraction failed: {doc.failureReason}</p>
           <button type="button" onClick={() => api.retry(id).then(reload)}>
@@ -183,7 +236,7 @@ export function DocumentDetailPage() {
           </button>
         </div>
       )}
-      {id === "doc-invoice-001" && (
+      {isLatestView && id === "doc-invoice-001" && (
         <div className="upload-box">
           <label>
             Upload revised invoice (v2) to test carry-over
@@ -202,7 +255,13 @@ export function DocumentDetailPage() {
       {error && <p className="error">{error}</p>}
       <div className="value-grid">
         {doc.values.map((v) => (
-          <ValueCard key={v.id} row={v} parsedText={doc.parsedText} onUpdated={reload} />
+          <ValueCard
+            key={v.id}
+            row={v}
+            parsedText={doc.parsedText}
+            onUpdated={reload}
+            readOnly={!isLatestView}
+          />
         ))}
       </div>
       {doc.status !== "extracted" && doc.values.length === 0 && <p>Waiting for extraction…</p>}
